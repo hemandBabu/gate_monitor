@@ -1,14 +1,18 @@
 import hashlib
 import os
 import smtplib
+import ssl
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import requests
 from bs4 import BeautifulSoup
+from requests.adapters import HTTPAdapter
+from urllib3.poolmanager import PoolManager
 
 TARGET_URL = "https://gate2027.iitm.ac.in"
 HASH_FILE = "last_hash.txt"
 
+# Read environment variables set by GitHub Actions
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "").strip()
 SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD", "").strip()
 RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL", "").strip()
@@ -23,13 +27,23 @@ HEADERS = {
 }
 
 
-def get_cleaned_page_text(url: str) -> str:
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=30, verify=True)
-    except requests.exceptions.SSLError:
-        # Fallback if the portal's SSL certificate chain causes handshake issues on runner
-        response = requests.get(url, headers=HEADERS, timeout=30, verify=False)
+# Custom SSL Adapter to allow OpenSSL 3 legacy renegotiation for IIT servers
+class LegacySSLAdapter(HTTPAdapter):
+    def init_poolmanager(self, *args, **kwargs):
+        ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+        # 0x4 corresponds to ssl.OP_LEGACY_SERVER_CONNECT
+        ctx.options |= getattr(ssl, "OP_LEGACY_SERVER_CONNECT", 0x4)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        kwargs["ssl_context"] = ctx
+        return super().init_poolmanager(*args, **kwargs)
 
+
+def get_cleaned_page_text(url: str) -> str:
+    session = requests.Session()
+    session.mount("https://", LegacySSLAdapter())
+
+    response = session.get(url, headers=HEADERS, timeout=30)
     response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "html.parser")
@@ -41,7 +55,7 @@ def get_cleaned_page_text(url: str) -> str:
 
 def send_email_alert(new_hash: str):
     if not (SENDER_EMAIL and SENDER_PASSWORD and RECIPIENT_EMAIL):
-        print("Notice: Email credentials missing or incomplete. Skipping email alert.")
+        print("Skipping email: Missing email credentials in secrets.")
         return
 
     subject = "🚨 GATE 2027 Portal Update Detected!"
@@ -66,7 +80,7 @@ New Hash: {new_hash}
             server.send_message(msg)
         print("Notification email sent successfully.")
     except Exception as e:
-        print(f"Warning: Failed to send email: {e}")
+        print(f"Warning: Failed to send email alert: {e}")
 
 
 def main():
