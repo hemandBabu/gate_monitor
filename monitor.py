@@ -23,11 +23,6 @@ HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
-# Create SSL context that allows legacy renegotiation
-ssl_context = ssl.create_default_context()
-ssl_context.options |= 0x4  # SSL_OP_LEGACY_SERVER_CONNECT
-
-
 def get_cleaned_page_text(url: str) -> str:
     try:
         # Don't pass ssl_context to verify parameter - requests doesn't support it
