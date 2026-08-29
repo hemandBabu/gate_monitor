@@ -30,14 +30,15 @@ ssl_context.options |= 0x4  # SSL_OP_LEGACY_SERVER_CONNECT
 
 def get_cleaned_page_text(url: str) -> str:
     try:
+        # Don't pass ssl_context to verify parameter - requests doesn't support it
         response = requests.get(
             url, 
             headers=HEADERS, 
             timeout=30, 
-            verify=ssl_context  # Use SSL context only once
+            verify=True  # Use standard SSL verification
         )
     except requests.exceptions.SSLError:
-        # Fallback: Disable SSL verification
+        # Fallback: Disable SSL verification if standard verification fails
         response = requests.get(
             url, 
             headers=HEADERS, 
@@ -46,8 +47,7 @@ def get_cleaned_page_text(url: str) -> str:
         )
 
     response.raise_for_status()
-    # ... rest of the function
-
+    
     soup = BeautifulSoup(response.text, "html.parser")
     for element in soup(["script", "style", "noscript", "svg", "meta"]):
         element.decompose()
