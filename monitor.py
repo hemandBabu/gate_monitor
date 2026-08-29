@@ -9,26 +9,30 @@ from bs4 import BeautifulSoup
 TARGET_URL = "https://gate2027.iitm.ac.in"
 HASH_FILE = "last_hash.txt"
 
-# Read environment variables set by GitHub Actions
-SENDER_EMAIL = os.environ.get("SENDER_EMAIL")
-SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD")
-RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL")
+SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "").strip()
+SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD", "").strip()
+RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL", "").strip()
 
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
-    )
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
 
 def get_cleaned_page_text(url: str) -> str:
-    response = requests.get(url, headers=HEADERS, timeout=30)
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=30, verify=True)
+    except requests.exceptions.SSLError:
+        # Fallback if the portal's SSL certificate chain causes handshake issues on runner
+        response = requests.get(url, headers=HEADERS, timeout=30, verify=False)
+
     response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "html.parser")
-    # Clean scripts, styles, and tags that change dynamically
     for element in soup(["script", "style", "noscript", "svg", "meta"]):
         element.decompose()
 
@@ -37,7 +41,7 @@ def get_cleaned_page_text(url: str) -> str:
 
 def send_email_alert(new_hash: str):
     if not (SENDER_EMAIL and SENDER_PASSWORD and RECIPIENT_EMAIL):
-        print("Skipping email: Missing email environment variables.")
+        print("Notice: Email credentials missing or incomplete. Skipping email alert.")
         return
 
     subject = "🚨 GATE 2027 Portal Update Detected!"
@@ -56,10 +60,13 @@ New Hash: {new_hash}
     msg["Subject"] = subject
     msg.attach(MIMEText(body, "plain"))
 
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-        server.login(SENDER_EMAIL, SENDER_PASSWORD)
-        server.send_message(msg)
-    print("Notification email sent successfully.")
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(SENDER_EMAIL, SENDER_PASSWORD)
+            server.send_message(msg)
+        print("Notification email sent successfully.")
+    except Exception as e:
+        print(f"Warning: Failed to send email: {e}")
 
 
 def main():
@@ -72,7 +79,7 @@ def main():
             old_hash = f.read().strip()
 
     if not old_hash:
-        print("First run: Initializing baseline hash.")
+        print(f"First run: Initializing baseline hash ({current_hash[:8]}).")
         with open(HASH_FILE, "w") as f:
             f.write(current_hash)
     elif current_hash != old_hash:
