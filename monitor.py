@@ -34,8 +34,7 @@ def get_cleaned_page_text(url: str) -> str:
             url, 
             headers=HEADERS, 
             timeout=30, 
-            verify=True,
-            verify=ssl_context  # Use SSL context
+            verify=ssl_context  # Use SSL context only once
         )
     except requests.exceptions.SSLError:
         # Fallback: Disable SSL verification
@@ -47,6 +46,7 @@ def get_cleaned_page_text(url: str) -> str:
         )
 
     response.raise_for_status()
+    # ... rest of the function
 
     soup = BeautifulSoup(response.text, "html.parser")
     for element in soup(["script", "style", "noscript", "svg", "meta"]):
