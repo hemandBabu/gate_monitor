@@ -1,0 +1,62 @@
+name: Monitor SWAYAM July 2026 Registration
+
+on:
+  schedule:
+    # Runs every 3 hours (UTC). Adjust cron schedule as needed.
+    - cron: '0 */3 * * *'
+  workflow_dispatch: # Allows manual trigger from the GitHub Actions tab
+
+jobs:
+  check-swayam:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fetch and Check SWAYAM Portal
+        id: check_page
+        run: |
+          URL="https://exams.nta.nic.in/swayam/"
+          USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+          # Download page content with retry logic
+          CONTENT=$(curl -sSL --retry 3 --retry-delay 5 -A "$USER_AGENT" "$URL")
+
+          # Filter lines containing 'SWAYAM' (case-insensitive)
+          SWAYAM_LINES=$(echo "$CONTENT" | grep -i "SWAYAM" || true)
+
+          # Target keyword pattern:
+          # Checks for 'July' and '2026' alongside 'Registration' / 'Exam' / 'Application'
+          MATCH=$(echo "$SWAYAM_LINES" | grep -iE "July.*2026.*(registration|exam|application)|(registration|application).*July.*2026" || true)
+
+          if [ -n "$MATCH" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "Matched line: $MATCH"
+            # Format snippet for the email body
+            CLEAN_TEXT=$(echo "$MATCH" | sed -e 's/<[^>]*>//g' | tr -s ' ' | head -n 5)
+            echo "snippet<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$CLEAN_TEXT" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "No announcement found for SWAYAM 2026 July exam registration."
+          fi
+
+      - name: Send Notification Email
+        if: steps.check_page.outputs.found == 'true'
+        uses: dawidd6/action-send-mail@v4
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "[ALERT] SWAYAM July 2026 Exam Registration Detected!"
+          to: ${{ secrets.MAIL_TO }}
+          from: "SWAYAM Monitor <${{ secrets.MAIL_USERNAME }}>"
+          body: |
+            A notification for SWAYAM July 2026 courses exam registration was detected on the NTA SWAYAM portal.
+
+            Detected snippet:
+            ${{ steps.check_page.outputs.snippet }}
+
+            Check the official link:
+            https://exams.nta.nic.in/swayam/
