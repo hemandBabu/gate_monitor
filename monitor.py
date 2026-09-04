@@ -1,5 +1,6 @@
 import hashlib
 import os
+import re
 import smtplib
 import ssl
 from email.mime.multipart import MIMEMultipart
@@ -7,8 +8,8 @@ from email.mime.text import MIMEText
 from urllib.request import Request, urlopen
 from bs4 import BeautifulSoup
 
-TARGET_URL = "https://gate2027.iitm.ac.in"
-HASH_FILE = "last_hash.txt"
+TARGET_URL = "https://exams.nta.nic.in/swayam/"
+STATE_FILE = "last_hash.txt"
 
 # Read environment variables set by GitHub Actions
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "").strip()
@@ -26,16 +27,19 @@ HEADERS = {
 
 
 def create_legacy_ssl_context() -> ssl.SSLContext:
-    """Creates an SSL context allowing OpenSSL 3 legacy renegotiation."""
+    """Handles older government server TLS configs and OpenSSL 3 renegotiation."""
     ctx = ssl.create_default_context()
-    # 0x4 enables SSL_OP_LEGACY_SERVER_CONNECT in OpenSSL
     ctx.options |= getattr(ssl, "OP_LEGACY_SERVER_CONNECT", 0x4)
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     return ctx
 
 
-def get_cleaned_page_text(url: str) -> str:
+def check_for_swayam_announcement(url: str) -> tuple[bool, str]:
+    """
+    Fetches the portal HTML, strips tags/scripts, filters lines mentioning SWAYAM,
+    and checks for July 2026 registration/exam announcements.
+    """
     ctx = create_legacy_ssl_context()
     req = Request(url, headers=HEADERS)
 
@@ -46,23 +50,42 @@ def get_cleaned_page_text(url: str) -> str:
     for element in soup(["script", "style", "noscript", "svg", "meta"]):
         element.decompose()
 
-    return " ".join(soup.stripped_strings)
+    # Extract clean text chunks
+    strings = [s.strip() for s in soup.stripped_strings if s.strip()]
+
+    # Filter lines mentioning SWAYAM
+    swayam_lines = [line for line in strings if "swayam" in line.lower()]
+
+    # Pattern: July + 2026 + (registration/exam/application/course)
+    pattern = re.compile(
+        r"(?=.*july)(?=.*2026)(?=.*(registration|exam|application|courses?))",
+        re.IGNORECASE,
+    )
+
+    matching_snippets = [line for line in swayam_lines if pattern.search(line)]
+
+    if matching_snippets:
+        combined_snippets = "\n".join(f"- {s}" for s in set(matching_snippets))
+        return True, combined_snippets
+
+    return False, ""
 
 
-def send_email_alert(new_hash: str):
+def send_email_alert(detected_content: str, content_hash: str):
     if not (SENDER_EMAIL and SENDER_PASSWORD and RECIPIENT_EMAIL):
         print("Notice: Email secrets missing. Skipping email dispatch.")
         return
 
-    subject = "🚨 GATE 2027 Portal Update Detected!"
+    subject = "🚨 SWAYAM July 2026 Courses Exam Registration Detected!"
     body = f"""Hello,
 
-A change has been detected on the official GATE 2027 website:
+An announcement matching SWAYAM July 2026 exam registration was detected on the official NTA SWAYAM portal:
 {TARGET_URL}
 
-Check the portal to see if registration/GOAPS has opened.
+Matched Details:
+{detected_content}
 
-New Hash: {new_hash}
+Notification Hash: {content_hash}
 """
     msg = MIMEMultipart()
     msg["From"] = SENDER_EMAIL
@@ -80,25 +103,27 @@ New Hash: {new_hash}
 
 
 def main():
-    cleaned_content = get_cleaned_page_text(TARGET_URL)
-    current_hash = hashlib.sha256(cleaned_content.encode("utf-8")).hexdigest()
+    found, snippet = check_for_swayam_announcement(TARGET_URL)
+
+    if not found:
+        print("No SWAYAM July 2026 exam registration announcement detected.")
+        return
+
+    # Compute hash of the matched content to avoid alert spam on subsequent runs
+    current_hash = hashlib.sha256(snippet.encode("utf-8")).hexdigest()
 
     old_hash = ""
-    if os.path.exists(HASH_FILE):
-        with open(HASH_FILE, "r") as f:
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "r") as f:
             old_hash = f.read().strip()
 
-    if not old_hash:
-        print(f"First run: Initializing baseline hash ({current_hash[:8]}).")
-        with open(HASH_FILE, "w") as f:
-            f.write(current_hash)
-    elif current_hash != old_hash:
-        print(f"Change detected! (Old: {old_hash[:8]} -> New: {current_hash[:8]})")
-        send_email_alert(current_hash)
-        with open(HASH_FILE, "w") as f:
+    if current_hash != old_hash:
+        print(f"Target announcement found! (Hash: {current_hash[:8]})")
+        send_email_alert(snippet, current_hash)
+        with open(STATE_FILE, "w") as f:
             f.write(current_hash)
     else:
-        print("No changes found on the page.")
+        print("Announcement still present, but already notified. Skipping email.")
 
 
 if __name__ == "__main__":
